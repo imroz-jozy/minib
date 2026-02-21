@@ -60,7 +60,7 @@ def create_tables():
     )
     """)
 
-    # SQL CONFIG TABLE
+    # SQL CONFIG TABLE (legacy SQL Server - kept for compatibility)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS sql_config (
         id INTEGER PRIMARY KEY,
@@ -68,6 +68,17 @@ def create_tables():
         password TEXT,
         database_name TEXT,
         server_name TEXT
+    )
+    """)
+
+    # BUSY CONFIG TABLE (Busy DLL connection)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS busy_config (
+        id INTEGER PRIMARY KEY,
+        busy_path TEXT,
+        data_path TEXT,
+        comp_code TEXT,
+        progid TEXT
     )
     """)
 
@@ -81,6 +92,36 @@ def create_tables():
     )
     """)
 
+    # APP CONFIG TABLE (for license and OpenAI API key)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS app_config (
+        id INTEGER PRIMARY KEY,
+        openai_api_key TEXT,
+        serial_no TEXT
+    )
+    """)
+
+    # SETTINGS TABLE
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    """)
+
     conn.commit()
     conn.close()
+
+def get_setting(key, default=None):
+    """Fetch a setting value by key."""
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT value FROM settings WHERE key=?", (key,))
+        row = cur.fetchone()
+        return row[0] if row else default
+    except Exception:
+        return default
+    finally:
+        conn.close()
 

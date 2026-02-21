@@ -48,29 +48,18 @@ def calculate_amount_with_tax(qty, price, tax_text, purchase_type):
     return round(base, 2)
 
 
-def calculate_price(list_price, discount_text, quantity=1):
+def calculate_price(list_price, discount_text, quantity=1, is_simple_discount=False):
     """
     Calculate final price after applying discount(s).
     
-    Discount formats:
-    - "X+Y+Z": percentage1 + percentage2 + amount (e.g., "5+2+20")
-    - "X+Y": percentage1 + percentage2 (both are percentages, e.g., "5+2")
-    - "X": single percentage or amount (e.g., "10" or "10%")
-    
-    Examples:
-    - "5+2+20" with quantity=2: 5% discount, then 2% discount on per-unit price, 
-      then 20 amount discount on total (qty × price)
-    - "5+2" means: 5% discount, then 2% discount (both percentages)
-    - "5+0+20" means: 5% discount, then 0% discount, then 20 amount discount on total
-    - "0+0+20" means: just 20 amount discount from absolute total (qty × price)
-    
     Args:
         list_price: Original list price (can be string or number)
-        discount_text: Discount string (e.g., "5+2+20", "5+2", "10")
+        discount_text: Discount string
         quantity: Quantity for flat amount discount calculation (default: 1)
+        is_simple_discount: Boolean, if True use Simple Discount logic
     
     Returns:
-        float: Final per-unit price after discounts, rounded to 2 decimal places
+        float: Final per-unit price after discounts
     """
     try:
         price = float(list_price) if list_price else 0.0
@@ -81,73 +70,93 @@ def calculate_price(list_price, discount_text, quantity=1):
     if not discount_text or not discount_text.strip():
         return round(price, 2)
     
-    parts = discount_text.strip().split("+")
+    discount_text = discount_text.strip()
     
-    # Expected format:
-    # - 3 parts: X+Y+Z (percentage1 + percentage2 + amount)
-    # - 2 parts: X+Y (percentage1 + percentage2, both are percentages)
-    # - 1 part: X (single percentage or amount)
-    if len(parts) >= 3:
-        # Format: X+Y+Z (percentage1 + percentage2 + amount)
-        try:
-            percent1 = float(parts[0].strip()) if parts[0].strip() else 0.0
-            percent2 = float(parts[1].strip()) if parts[1].strip() else 0.0
-            amount = float(parts[2].strip()) if parts[2].strip() else 0.0
-            
-            # Apply first percentage discount
-            if percent1 > 0:
-                price -= price * (percent1 / 100)
-            
-            # Apply second percentage discount
-            if percent2 > 0:
-                price -= price * (percent2 / 100)
-            
-            # Apply flat amount discount on absolute total (qty × price)
-            # Then divide back to get per-unit price
-            if amount > 0:
-                total = price * qty
-                total -= amount
-                price = total / qty if qty > 0 else 0.0
-            
-        except (ValueError, TypeError):
-            # If parsing fails, return original price
-            return round(price, 2)
-    elif len(parts) == 2:
-        # Format: X+Y (percentage1 + percentage2, both are percentages)
-        try:
-            percent1 = float(parts[0].strip()) if parts[0].strip() else 0.0
-            percent2 = float(parts[1].strip()) if parts[1].strip() else 0.0
-            
-            # Apply first percentage discount
-            if percent1 > 0:
-                price -= price * (percent1 / 100)
-            
-            # Apply second percentage discount
-            if percent2 > 0:
-                price -= price * (percent2 / 100)
-            
-        except (ValueError, TypeError):
-            pass
-    else:
-        # Single value: try as percentage first, then amount
-        part = parts[0].strip()
-        if not part:
-            return round(price, 2)
+    if is_simple_discount:
+        # Simple Discount Logic:
+        # - "5" -> 5% discount
+        # - "0+5" -> 5 amount discount (flat off per unit? or total? usually per unit in simple disc context or flattened)
+        # User said: "if i enter 5 then 5 percent less"
+        # "if ia add 0+5 then value 5 is less from list price simple" -> Implies flat amount off LIST PRICE (per unit)
         
-        try:
-            if part.endswith("%"):
-                percent = float(part.replace("%", "").strip())
+        if "+" in discount_text:
+            # Check for amount pattern "0+X"
+            parts = discount_text.split("+")
+            if len(parts) == 2 and parts[0].strip() == "0":
+                try:
+                    amount = float(parts[1].strip())
+                    price -= amount
+                except ValueError:
+                    pass
+            elif len(parts) >= 2:
+                 # Fallback for "5+0" or other? Assuming only "0+X" triggers amount for now based on user request.
+                 # User said "0+5".
+                 # If user enters "5+5" in simple mode, what happens? 
+                 # User said "simple discount percentage OR amount". 
+                 # So likely only one or the other.
+                 pass
+        else:
+            # Percentage
+            try:
+                # Remove % if present
+                val_str = discount_text.replace("%", "").strip()
+                percent = float(val_str)
                 price -= price * (percent / 100)
-            else:
-                # For single amount discount, apply on absolute total
-                amount = float(part)
-                total = price * qty
-                total -= amount
-                price = total / qty if qty > 0 else 0.0
-        except (ValueError, TypeError):
-            pass
-    
-    return round(price, 2)
+            except ValueError:
+                pass
+            
+        return round(price, 2)
+
+    else:
+        # Compound Discount (P+P+A) Logic
+        # Existing logic handles X+Y+Z, X+Y, X
+        
+        parts = discount_text.split("+")
+        
+        if len(parts) >= 3:
+            # Format: X+Y+Z
+            try:
+                percent1 = float(parts[0].strip()) if parts[0].strip() else 0.0
+                percent2 = float(parts[1].strip()) if parts[1].strip() else 0.0
+                amount = float(parts[2].strip()) if parts[2].strip() else 0.0
+                
+                if percent1 > 0:
+                    price -= price * (percent1 / 100)
+                if percent2 > 0:
+                    price -= price * (percent2 / 100)
+                
+                # compound amount is usually on total, but user said "Compound Discount(P+P+A)"
+                # My existing logic did amount on TOTAL (qty*price).
+                # User's simple logic did amount on PRICE ("value 5 is less from list price").
+                # Let's keep existing compound logic as is since user said "use current structure".
+                if amount > 0:
+                    total = price * qty
+                    total -= amount
+                    price = total / qty if qty > 0 else 0.0
+            except ValueError:
+                pass
+        elif len(parts) == 2:
+             # Format: X+Y (both percent)
+            try:
+                percent1 = float(parts[0].strip()) if parts[0].strip() else 0.0
+                percent2 = float(parts[1].strip()) if parts[1].strip() else 0.0
+                
+                if percent1 > 0:
+                    price -= price * (percent1 / 100)
+                if percent2 > 0:
+                    price -= price * (percent2 / 100)
+            except ValueError:
+                pass
+        else:
+             # Single value -> treat as percent
+             try:
+                val_str = discount_text.replace("%", "").strip()
+                percent = float(val_str)
+                price -= price * (percent / 100)
+             except ValueError:
+                pass
+
+        return round(price, 2)
 
 
 def calculate_total_amount(amounts):

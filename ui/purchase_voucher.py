@@ -1,5 +1,10 @@
 import tkinter as tk
 from tkinter import ttk, messagebox
+try:
+    from rapidfuzz import process, fuzz
+except ImportError:
+    process = None
+    fuzz = None
 from database.db import get_connection, create_tables
 import threading
 from tkinter import filedialog
@@ -7,7 +12,7 @@ import json
 import pdfplumber
 import re
 from utils.autocomplete import create_item_autocomplete
-from database.sql_server import get_item_autofill_data
+from database.sql_server import get_item_autofill_data, get_all_item_names
 from datetime import datetime
 from utils.pdf_utils import extract_text_from_pdf
 from utils.ai_utils import parse_with_openai
@@ -53,9 +58,26 @@ def open_purchase_voucher():
     set_add_item_parent(pv)
     set_add_party_parent(pv)
 
-    # ================= HEADER =================
-    header = ttk.LabelFrame(pv, text="Voucher Details")
-    header.pack(fill="x", padx=10, pady=5)
+    # ================= MAIN LAYOUT SETUP =================
+    main_frame = ttk.Frame(pv)
+    main_frame.pack(fill="both", expand=True, padx=10)
+
+    # Left Frame (Voucher Details, Item Entry, Table) - Width 950
+    left_frame = ttk.Frame(main_frame, width=950)
+    left_frame.pack(side="left", fill="y")
+    left_frame.pack_propagate(False)
+
+    # Right Frame (Create, Item Info) - Width 200
+    right_frame = ttk.Frame(main_frame, width=200)
+    right_frame.pack(side="right", fill="y", padx=5)
+
+    # ================= VOUCHER DETAILS FRAME (Merged) =================
+    details_frame = ttk.LabelFrame(left_frame, text="Voucher Details")
+    details_frame.pack(fill="x", padx=10, pady=5)
+
+    # Subframe for Header Details (Top)
+    header_subframe = ttk.Frame(details_frame)
+    header_subframe.pack(fill="x", padx=5, pady=5)
 
     fields = ["Date", "Series", "Voucher No", "Purchase Type", "Party Name"]
     header_entries = {}
@@ -74,21 +96,21 @@ def open_purchase_voucher():
     
     # Header fields
     for i, field in enumerate(fields):
-        ttk.Label(header, text=field).grid(row=0, column=i*2, padx=5, sticky="w")
+        ttk.Label(header_subframe, text=field).grid(row=0, column=i*2, padx=5, sticky="w")
         
         # Use Combobox for Purchase Type, Entry for others
         if field == "Purchase Type":
-            combo = ttk.Combobox(header, width=18, values=purchase_type_values, state="readonly")
+            combo = ttk.Combobox(header_subframe, width=18, values=purchase_type_values, state="readonly")
             combo.grid(row=0, column=i*2+1, padx=5)
             combo.current(0)  # Set first item as default
             header_entries[field] = combo
         elif field == "Party Name":
             # Use autocomplete for Party Name (mastertype=2)
-            party_autocomplete = create_item_autocomplete(header, mastertype=2, width=15)
+            party_autocomplete = create_item_autocomplete(header_subframe, mastertype=2, width=15)
             party_autocomplete.entry.grid(row=0, column=i*2+1, padx=5)
             header_entries[field] = party_autocomplete.entry
         else:
-            ent = ttk.Entry(header, width=15)
+            ent = ttk.Entry(header_subframe, width=15)
             ent.grid(row=0, column=i*2+1, padx=5)
             if field == "Series":
                 ent.insert(0, "Main")
@@ -105,8 +127,8 @@ def open_purchase_voucher():
             header_entries[field] = ent
     
     # Add Item and Add Party buttons in header (functions defined after entries)
-    btn_header_frame = ttk.Frame(header)
-    btn_header_frame.grid(row=0, column=len(fields)*2, padx=10, sticky="e")
+    # Add Item and Add Party buttons moved to 'Create' frame in right sidebar
+    # btn_header_frame removed from here
     
     # Buttons will be created after entries are defined (see below)
     def on_item_saved(item_name, unit, hsn, tax_category):
@@ -130,37 +152,40 @@ def open_purchase_voucher():
             header_entries["Party Name"].delete(0, tk.END)
             header_entries["Party Name"].insert(0, party_name)
 
-    # ================= ITEM ENTRY =================
-    entry_frame = ttk.LabelFrame(pv, text="Item Entry")
-    entry_frame.pack(fill="x", padx=10, pady=5)
+    # ================= ITEM ENTRY SECTION (Bottom of Details Frame) =================
+    # Separator logic is implicitly handled by packing order, add separator if needed or just space.
+    ttk.Separator(details_frame, orient='horizontal').pack(fill='x', pady=5)
 
-    labels = ["Item Name", "Tax Category", "HSN", "Qty", "Unit", "List Price", "Discount", "Price"]
+    entry_subframe = ttk.Frame(details_frame)
+    entry_subframe.pack(fill="x", padx=5, pady=5)
+
+    labels = ["Item Name", "Tax Category", "Qty", "Unit", "List Price", "Discount", "Price"]
     entries = {}
     item_autocomplete = None  # Store autocomplete reference for callback
 
     for i, lbl in enumerate(labels):
-        ttk.Label(entry_frame, text=lbl).grid(row=0, column=i, padx=5)
+        ttk.Label(entry_subframe, text=lbl).grid(row=0, column=i, padx=5)
         
         # Use autocomplete for Item Name, Tax Category, and Unit
         if lbl == "Item Name":
-            item_autocomplete = create_item_autocomplete(entry_frame, mastertype=6, width=14)
+            item_autocomplete = create_item_autocomplete(entry_subframe, mastertype=6, width=14)
             item_autocomplete.entry.grid(row=1, column=i, padx=5)
             entries[lbl] = item_autocomplete.entry
         elif lbl == "Tax Category":
-            tax_autocomplete = create_item_autocomplete(entry_frame, mastertype=25, width=14)
+            tax_autocomplete = create_item_autocomplete(entry_subframe, mastertype=25, width=14)
             tax_autocomplete.entry.grid(row=1, column=i, padx=5)
             entries[lbl] = tax_autocomplete.entry
         elif lbl == "Unit":
-            unit_autocomplete = create_item_autocomplete(entry_frame, mastertype=8, width=14)
+            unit_autocomplete = create_item_autocomplete(entry_subframe, mastertype=8, width=14)
             unit_autocomplete.entry.grid(row=1, column=i, padx=5)
             entries[lbl] = unit_autocomplete.entry
         elif lbl == "Price":
             # Price field is readonly (auto-calculated from List Price and Discount)
-            ent = ttk.Entry(entry_frame, width=14, state="readonly")
+            ent = ttk.Entry(entry_subframe, width=14, state="readonly")
             ent.grid(row=1, column=i, padx=5)
             entries[lbl] = ent
         else:
-            ent = ttk.Entry(entry_frame, width=14)
+            ent = ttk.Entry(entry_subframe, width=14)
             ent.grid(row=1, column=i, padx=5)
             entries[lbl] = ent
     
@@ -186,7 +211,13 @@ def open_purchase_voucher():
             except (ValueError, TypeError):
                 quantity = 1
             
-            final_price = calculate_price(list_price, discount_str, quantity)
+            # Fetch active discount structure setting
+            from database.db import get_setting
+            from utils.setting_keys import SETTING_ACTIVE_DISCOUNT_STRUCT
+            active_struct = get_setting(SETTING_ACTIVE_DISCOUNT_STRUCT, "Simple Discount")
+            is_simple = "Simple" in active_struct
+
+            final_price = calculate_price(list_price, discount_str, quantity, is_simple_discount=is_simple)
             
             entries["Price"].config(state="normal")
             entries["Price"].delete(0, tk.END)
@@ -271,19 +302,34 @@ def open_purchase_voucher():
         open_add_party(on_party_saved, party_name, "", "")
     
     # Create buttons now that entries are defined
-    ttk.Button(btn_header_frame, text="Add Item", width=12, 
-               command=open_add_item_with_data).pack(side="left", padx=2)
-    ttk.Button(btn_header_frame, text="Add Party", width=12, 
-               command=open_add_party_with_data).pack(side="left", padx=2)
+    # Buttons created in right_frame below
 
-    # ================= MAIN CONTENT =================
-    main_frame = ttk.Frame(pv)
-    main_frame.pack(fill="both", expand=True, padx=10)
 
-    # ================= LEFT FRAME (2/3 WIDTH) =================
-    left_frame = ttk.Frame(main_frame, width=950)
-    left_frame.pack(side="left", fill="y")
-    left_frame.pack_propagate(False)
+    # ================= MAIN CONTENT SETUP MOVED TO TOP =================
+    # (main_frame, left_frame, right_frame already created)
+    
+    # ================= RIGHT FRAME CONTENT =================
+    
+    # Create Frame (New)
+    create_frame = ttk.LabelFrame(right_frame, text="Create", width=200)
+    create_frame.pack(pady=5, fill="x")
+    
+    ttk.Button(create_frame, text="Add Item", width=15, 
+               command=open_add_item_with_data).pack(pady=5, padx=5)
+    ttk.Button(create_frame, text="Add Party", width=15, 
+               command=open_add_party_with_data).pack(pady=5, padx=5)
+
+    
+    # Item Info Frame
+    item_info_frame = ttk.LabelFrame(right_frame, text="Item Info", width=200, height=200)
+    item_info_frame.pack(pady=5)
+    item_info_frame.pack_propagate(False) # Enforce size
+    
+    # Move HSN Widget here
+    ttk.Label(item_info_frame, text="HSN").pack(pady=(10, 0), padx=5)
+    hsn_entry = ttk.Entry(item_info_frame, width=20)
+    hsn_entry.pack(pady=5, padx=5)
+    entries["HSN"] = hsn_entry
 
     # ================= BUTTONS (TOP) =================
     btn_frame = ttk.Frame(left_frame)
@@ -509,7 +555,10 @@ def open_purchase_voucher():
         nonlocal selected_row_id
         # Clear any selected row when adding new item
         if selected_row_id:
-            table.selection_remove(selected_row_id)
+            try:
+                table.selection_remove(selected_row_id)
+            except:
+                pass
             selected_row_id = None
         
         qty = entries["Qty"].get()
@@ -548,10 +597,12 @@ def open_purchase_voucher():
         # entries keys: ["Item Name", "Tax Category", "HSN", "Qty", "Unit", "List Price", "Discount", "Price"]
         
         # Map table values to entry fields (skip SNo and Amount)
-        entry_keys = list(entries.keys())
+        # We must use explicit order matching the columns: 
+        # ("SNo", "Item", "Tax Category", "HSN", "Qty", "Unit", "List", "Disc", "Price", "Amount")
+        ordered_keys = ["Item Name", "Tax Category", "HSN", "Qty", "Unit", "List Price", "Discount", "Price"]
         table_values = values[1:-1]  # Skip SNo and Amount
         
-        for key, val in zip(entry_keys, table_values):
+        for key, val in zip(ordered_keys, table_values):
             if key == "Price":
                 # Price field is readonly, handle it specially
                 entries[key].config(state="normal")
@@ -772,11 +823,13 @@ def open_purchase_voucher():
     # Override
     update_total_amount = new_update_total_amount
 
-    def apply_tax():
+    def apply_tax(silent=False):
+
         """Calculate and apply taxes as Bill Sundries for MultiRate purchase types."""
         purchase_type = header_entries["Purchase Type"].get()
         if "MultiRate" not in purchase_type:
-            messagebox.showinfo("Info", "Apply Tax is only available for MultiRate purchase types.")
+            if not silent:
+                messagebox.showinfo("Info", "Apply Tax is only available for MultiRate purchase types.")
             return
 
         # Prepare items for calculation
@@ -800,7 +853,8 @@ def open_purchase_voucher():
                 continue
         
         if not items_data:
-            messagebox.showwarning("Warning", "No valid items found to calculate tax.")
+            if not silent:
+                messagebox.showwarning("Warning", "No valid items found to calculate tax.")
             return
 
         # Prepare existing Bill Sundries (exclude existing taxes to avoid double counting)
@@ -829,7 +883,8 @@ def open_purchase_voucher():
         new_taxes = calculate_multirate_tax(items_data, bs_data, purchase_type)
         
         if not new_taxes:
-            messagebox.showinfo("Info", "No taxes calculated.")
+            if not silent:
+                messagebox.showinfo("Info", "No taxes calculated.")
             return
             
         # Delete old tax entries
@@ -855,7 +910,58 @@ def open_purchase_voucher():
             bs_table.item(row, values=vals)
             
         calculate_grand_total()
-        messagebox.showinfo("Success", "Tax applied successfully.")
+        calculate_grand_total()
+        if not silent:
+            messagebox.showinfo("Success", "Tax applied successfully.")
+
+    def recalculate_all():
+        """Recalculate Price and Amount for all items, then apply tax."""
+        for row in table.get_children():
+            vals = list(table.item(row)["values"])
+            # vals: SNo, Item, Tax Cat, HSN, Qty, Unit, List, Disc, Price, Amount
+            # Index: 0, 1, 2, 3, 4, 5, 6, 7, 8, 9
+            
+            qty_str = str(vals[4])
+            list_price_str = str(vals[6])
+            disc_str = str(vals[7])
+            
+            try:
+                qty = float(qty_str) if qty_str and qty_str != 'None' else 1.0
+            except (ValueError, TypeError):
+                qty = 1.0
+            
+            try:
+                list_price = float(list_price_str) if list_price_str and list_price_str != 'None' else 0.0
+            except (ValueError, TypeError):
+                list_price = 0.0
+            
+            discount_text = disc_str if disc_str and disc_str != 'None' else ""
+            
+            # Recalculate Price (Unit Price)
+            # Note: calculate_price handles flat discount on total amount
+            final_price = calculate_price(list_price, discount_text, qty)
+            
+            # Recalculate Total Amount
+            # Use calculate_amount_with_tax to handle ItemWise tax inclusion automatically
+            purchase_type = header_entries["Purchase Type"].get()
+            tax_text = str(vals[2]) if vals[2] else ""
+            total_amt = calculate_amount_with_tax(qty, final_price, tax_text, purchase_type)
+            
+            # Update Item
+            vals[8] = f"{final_price:.2f}"
+            vals[9] = f"{total_amt:.2f}"
+            table.item(row, values=vals)
+        
+        # Update Item Total
+        update_total_amount()
+        
+        # Apply Tax (if MultiRate)
+        # We call apply_tax() but suppress "Info" messages if possible?
+        # apply_tax has success message. It's fine.
+        # Apply Tax (if MultiRate)
+        # We call apply_tax() but suppress "Info" messages if possible?
+        # apply_tax has success message. It's fine.
+        apply_tax(silent=True)
 
     # Connect BS Buttons
     ttk.Button(bs_btn_frame, text="Add", command=add_bill_sundry).pack(side="left", padx=2)
@@ -863,6 +969,7 @@ def open_purchase_voucher():
     ttk.Button(bs_btn_frame, text="Edit", command=edit_bill_sundry).pack(side="left", padx=2)
     ttk.Button(bs_btn_frame, text="Delete", command=delete_bill_sundry).pack(side="left", padx=2)
     ttk.Button(bs_btn_frame, text="Apply Tax", command=apply_tax).pack(side="left", padx=2)
+    ttk.Button(bs_btn_frame, text="Recalc All", command=recalculate_all).pack(side="left", padx=2)
 
 
 
@@ -1094,6 +1201,87 @@ def open_purchase_voucher():
             traceback.print_exc()
             messagebox.showerror("Error", f"Failed to upload voucher: {str(e)}")
 
+    def match_items():
+        if process is None or fuzz is None:
+            messagebox.showerror("Error", "rapidfuzz library is not installed. Please install it to use this feature.")
+            return
+
+        db_items = get_all_item_names()
+        if not db_items:
+            messagebox.showwarning("Warning", "No items found in database (mastertype=6).")
+            return
+
+        # Prepare to highlight matched items
+        table.tag_configure("matched", foreground="green")
+        
+        match_count = 0
+        
+        for row in table.get_children():
+            values = list(table.item(row)["values"])
+            # values: SNo, Item, Tax Cat, HSN, Qty, Unit, List, Disc, Price, Amount
+            current_name = str(values[1])
+            
+            # Skip if empty
+            if not current_name.strip():
+                continue
+                
+            # Perform fuzzy match
+            # fuzz.token_sort_ratio is good for "Philips 9W" vs "9W Philips"
+            # It is generally case insensitive in rapidfuzz logic (lowercases string)
+            params = {"scorer": fuzz.token_sort_ratio}
+            match_result = process.extractOne(current_name, db_items, **params)
+            
+            # match_result is (match, score, index)
+            if match_result:
+                match_name, score, _ = match_result
+                
+                # Threshold: 80 seems reasonable for fairly messy inputs
+                if score >= 80:
+                    # Update Name
+                    values[1] = match_name
+                    
+                    # Fetch Tax/Unit info
+                    # We need a date for tax rate lookup, use current voucher date or today
+                    v_date_str = header_entries["Date"].get()
+                    # Try to parse date or default to today for tax lookup
+                    try:
+                        # Assuming helper logic exists or just pass string if helper handles it
+                        # sql_server.get_item_autofill_data expects YYYY-MM-DD
+                        # Let's use a simple heuristic or pass as is if robust
+                        # For now, pass as is, the helper might fail if format is bad but returns defaults
+                         # Ideally, convert v_date_str to YYYY-MM-DD
+                        v_date = v_date_str
+                        # Parse date if possible
+                        from database.sql_server import parse_smart_date
+                        parsed_date, _ = parse_smart_date(v_date_str)
+                        if parsed_date:
+                            v_date = parsed_date
+                    except:
+                        v_date = None
+
+                    autofill = get_item_autofill_data(match_name, v_date)
+                    if autofill:
+                        unit_name, tax_rate = autofill
+                        
+                        # Update Tax Category and Unit if found
+                        if tax_rate is not None:
+                            # Use raw tax rate string to match manual entry behavior
+                            values[2] = str(tax_rate)
+                        
+                        if unit_name:
+                            values[5] = unit_name
+                            
+                    # Update table
+                    table.item(row, values=values, tags=("matched",))
+                    match_count += 1
+        
+        if match_count > 0:
+            recalculate_all()
+            messagebox.showinfo("Match Complete", f"Matched {match_count} items successfully.")
+        else:
+            messagebox.showinfo("Match Complete", "No close matches found.")
+
+
     # ================= BUTTONS =================
     # ================= BUTTONS =================
     ttk.Button(btn_frame, text="Add", width=10, command=add_item).pack(side="left", padx=5)
@@ -1101,4 +1289,71 @@ def open_purchase_voucher():
     ttk.Button(btn_frame, text="Edit", width=10, command=edit_item).pack(side="left", padx=5)
     ttk.Button(btn_frame, text="Delete", width=10, command=delete_item).pack(side="left", padx=5)
     ttk.Button(btn_frame, text="Import PDF", width=12, command=lambda: import_pdf_invoice()).pack(side="left", padx=5)
+    ttk.Button(btn_frame, text="Match Items", width=12, command=match_items).pack(side="left", padx=5)
     ttk.Button(btn_frame, text="Save", width=10, command=save_items).pack(side="left", padx=5)
+
+    # ================= KEYBOARD NAVIGATION =================
+    def setup_navigation():
+        """Setup keyboard traversal for data entry efficiency."""
+        
+        widgets = [
+            header_entries["Date"],
+            header_entries["Series"],
+            header_entries["Voucher No"],
+            header_entries["Purchase Type"],
+            header_entries["Party Name"],
+            entries["Item Name"],
+            entries["Tax Category"],
+            entries["Qty"],
+            entries["Unit"],
+            entries["List Price"],
+            entries["Discount"],
+        ]
+
+        def focus_next(event, current_widget):
+            try:
+                # If current widget is Combobox, we might need to be careful?
+                # Default behavior of Return on Combobox might be 'select'.
+                # We want to move to next field.
+                idx = widgets.index(current_widget)
+                if idx < len(widgets) - 1:
+                    next_widget = widgets[idx + 1]
+                    next_widget.focus_set()
+                    return "break"
+            except ValueError:
+                pass
+        
+        def focus_prev(event, current_widget):
+            try:
+                idx = widgets.index(current_widget)
+                if idx > 0:
+                    prev_widget = widgets[idx - 1]
+                    prev_widget.focus_set()
+                    return "break"
+            except ValueError:
+                pass
+
+        def on_discount_enter(event):
+            add_item()
+            # After adding, focus back to Item Name
+            entries["Item Name"].focus_set()
+            return "break"
+
+        for w in widgets:
+            if w == entries["Discount"]:
+                w.bind("<Return>", on_discount_enter)
+            else:
+                # Use add='+' to ensure we don't overwrite Autocomplete's own bindings
+                w.bind("<Return>", lambda e, cw=w: focus_next(e, cw), add='+')
+            
+            w.bind("<Left>", lambda e, cw=w: focus_prev(e, cw))
+             # Ensure Comboboxes handle Return correctly
+            if isinstance(w, ttk.Combobox):
+                w.bind("<Return>", lambda e, cw=w: focus_next(e, cw), add='+')
+
+    setup_navigation()
+    
+    # Set initial focus (delayed to ensure window is ready)
+    pv.after(100, lambda: header_entries["Date"].focus_set())
+
+    return pv

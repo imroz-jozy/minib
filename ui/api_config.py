@@ -18,11 +18,20 @@ def set_main_window(root):
 
 def get_api_key():
     """
-    Get API key from database (returns password field from api_config)
+    Get API key from database (app_config table first, then api_config table)
     Falls back to config.json if database doesn't have a valid key
     Maintains backward compatibility with purchase_voucher.py
     """
-    # First try database
+    # First try app_config table (new location for OpenAI API key)
+    try:
+        from database.app_config import get_app_config
+        config = get_app_config()
+        if config and config[0] and config[0].strip() and config[0].strip() != '0':
+            return config[0].strip()
+    except Exception as e:
+        print(f"Error reading app_config: {e}")
+    
+    # Second try api_config table (old location, kept for compatibility)
     config = get_api_config()
     if config and config[2] and config[2].strip() and config[2].strip() != '0':  # config[2] is password field
         return config[2].strip()

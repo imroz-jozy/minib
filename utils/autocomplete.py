@@ -1,10 +1,10 @@
 """
-Autocomplete/Search functionality for Entry widgets with SQL Server database lookup.
-This module provides reusable autocomplete widgets that can be used across the application.
+Autocomplete/Search functionality for Entry widgets with SQL Server lookup.
+Uses pyodbc to fetch results from BUSY SQL Server tables.
 """
 
 import tkinter as tk
-from database.sql_server import get_sql_connection
+from database.sql_server import fetch_autocomplete
 
 
 class AutocompleteEntry:
@@ -21,23 +21,25 @@ class AutocompleteEntry:
         entry = autocomplete.entry
     """
     
-    def __init__(self, parent, query, query_params, result_column=0, max_results=20, 
-                 listbox_height=6, entry_width=None, **entry_kwargs):
+    def __init__(self, parent, query=None, query_params=None, result_column=0, max_results=20, 
+                 listbox_height=6, entry_width=None, mastertype=None, **entry_kwargs):
         """
         Initialize the autocomplete entry widget.
         
         Args:
             parent: Parent tkinter widget
-            query: SQL query string with placeholder (?)
-            query_params: Function that takes prefix and returns tuple of parameters for query
-            result_column: Column index to use from query result (default: 0)
-            max_results: Maximum number of results to show (default: 20)
-            listbox_height: Height of the dropdown listbox (default: 6)
-            entry_width: Width of the entry widget (default: None)
-            **entry_kwargs: Additional keyword arguments for Entry widget
+            query: (Legacy) SQL query string - unused, Busy uses mastertype
+            query_params: (Legacy) Function - unused for Busy
+            result_column: Column index (default: 0)
+            max_results: Maximum results (default: 20)
+            listbox_height: Height of dropdown (default: 6)
+            entry_width: Width of entry (default: None)
+            mastertype: Busy master type - 6=Item, 2=Party, etc.
+            **entry_kwargs: Additional arguments for Entry
         """
         self.query = query
         self.query_params = query_params
+        self.mastertype = mastertype if mastertype is not None else 6
         self.result_column = result_column
         self.max_results = max_results
         self.listbox_visible = False
@@ -107,44 +109,27 @@ class AutocompleteEntry:
         self.entry.delete(0, tk.END)
         self.entry.insert(0, value)
         self._hide_listbox()
+        # Restore focus to entry
+        self.entry.focus_set()
         # Trigger any callback if set
         if hasattr(self, 'on_select'):
             self.on_select(value)
     
     def _fetch_results(self, prefix):
         """
-        Fetch search results from SQL Server database.
+        Fetch search results from Busy database via DLL GetRecordset.
         
         Args:
             prefix: Search prefix string
             
         Returns:
-            List of result strings
+            List of result strings (Name column)
         """
         if not prefix or not prefix.strip():
             return []
         
         try:
-            conn = get_sql_connection()
-            if not conn:
-                print("Warning: SQL Server connection not available. Please configure SQL Server in SQL Config.")
-                return []
-            
-            cursor = conn.cursor()
-            params = self.query_params(prefix.strip())
-            
-            # Modify query to add TOP if not present
-            query = self.query
-            if "TOP" not in query.upper() and "LIMIT" not in query.upper():
-                # Insert TOP after SELECT
-                query = query.replace("SELECT ", f"SELECT TOP {self.max_results} ", 1)
-            
-            cursor.execute(query, params)
-            results = [row[self.result_column] for row in cursor.fetchall()]
-            
-            cursor.close()
-            conn.close()
-            
+            results = fetch_autocomplete(prefix.strip(), self.mastertype, self.max_results)
             return results
         except Exception as e:
             print(f"Error fetching autocomplete results: {e}")
@@ -180,32 +165,45 @@ class AutocompleteEntry:
     
     def _on_enter(self, event):
         """Handle Enter key press."""
-        if self.listbox.size() > 0:
+        if self.listbox.size() > 0 and self.listbox_visible:
             selection = self.listbox.curselection()
             if selection:
                 self._fill_entry(self.listbox.get(selection[0]))
             else:
                 # If no selection, fill with first item
                 self._fill_entry(self.listbox.get(0))
-        return "break"
+        
+        # If this event came from Listbox, we need to manually trigger Return on Entry
+        # so that navigation logic (bound to Entry) will fire.
+        if event.widget == self.listbox:
+             self.entry.event_generate("<Return>")
+             
+        # Allow event to propagate to other handlers (like navigation)
+        return
     
     def _on_listbox_click(self, event):
         """Handle listbox item selection."""
         if not self.listbox.curselection():
             return
         self._fill_entry(self.listbox.get(self.listbox.curselection()))
-    
+        # Trigger navigation on click too? Maybe purely focus is enough.
+        # User asked for 'enter' behavior mainly. Focus is already set by _fill_entry fix.
+
     def _on_listbox_double_click(self, event):
         """Handle listbox item double-click."""
         if not self.listbox.curselection():
             return
         self._fill_entry(self.listbox.get(self.listbox.curselection()))
+        # Double click usually implies "done", so trigger navigation
+        self.entry.event_generate("<Return>")
     
     def _on_down_arrow(self, event):
         """Handle down arrow key."""
         if self.listbox_visible and self.listbox.size() > 0:
             self.listbox.focus_set()
+            self.listbox.selection_clear(0, tk.END)
             self.listbox.selection_set(0)
+            self.listbox.activate(0)
         return "break"
     
     def _on_up_arrow(self, event):
@@ -255,31 +253,19 @@ class AutocompleteEntry:
 
 def create_item_autocomplete(parent, mastertype=6, **kwargs):
     """
-    Convenience function to create an autocomplete entry for item search.
+    Convenience function to create an autocomplete entry for item/party search.
     
     Args:
         parent: Parent tkinter widget
-        mastertype: Master type for item search (default: 6)
+        mastertype: Busy master type - 6=Item, 2=Party (default: 6)
         **kwargs: Additional arguments for AutocompleteEntry
         
     Returns:
         AutocompleteEntry instance
     """
-    query = """
-        SELECT TOP 20 name
-        FROM master1
-        WHERE mastertype = ?
-          AND name LIKE ?
-        ORDER BY name
-    """
-    
-    def query_params(prefix):
-        return (mastertype, prefix + "%")
-    
     return AutocompleteEntry(
         parent,
-        query=query,
-        query_params=query_params,
+        mastertype=mastertype,
         result_column=0,
         max_results=20,
         **kwargs
